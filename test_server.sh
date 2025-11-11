@@ -57,7 +57,7 @@ fi
 
 # Test 5: Directories
 echo "Test 5: Directory structure"
-if [ -d "~/.termux_pxe_boot" ]; then
+if [ -d "$HOME/.termux_pxe_boot" ]; then
     print_test "Base directory exists" 0
 else
     print_test "Base directory exists" 1
