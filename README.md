@@ -28,6 +28,39 @@ chmod +x install_termux.sh && ./install_termux.sh
 
 ---
 
+## 🔥 **NEW: PC Ethernet + Mobile WiFi Method**
+
+### Perfect for Mixed Network Setups!
+
+**Scenario**: PC connected via ethernet cable + Phone connected via WiFi to same router
+**Problem**: Router often isolates ethernet and WiFi networks
+**Solution**: Universal Network Bridge automatically detects and bridges the gap!
+
+```bash
+# 1. Set up the Universal Network Bridge
+python3 UNIVERSAL_NETWORK_BRIDGE.py --auto-bridge
+
+# 2. Run the PXE server
+./run_termux.sh
+
+# 3. PC on ethernet will boot via phone's WiFi connection!
+```
+
+**Key Features:**
+- ✅ **Automatic Detection**: Detects PC ethernet + phone WiFi scenario
+- ✅ **Router-Agnostic**: Works regardless of router isolation settings
+- ✅ **Zero Configuration**: No manual setup required
+- ✅ **Cross-Platform**: Works on Linux, Windows, macOS, Android
+- ✅ **Multiple Fallback Methods**: UDP tunnels, WiFi Direct, USB tethering
+
+**Benefits:**
+- 🚀 **Faster Boot**: Ethernet provides stable, high-speed connection
+- 🔗 **Network Isolation Solved**: No need to disable router features
+- 🛡️ **Secure**: Keeps different network segments properly isolated
+- 🔧 **Universal**: Works with ANY router configuration
+
+---
+
 ## ✅ Features
 
 - ✅ **Complete DHCP Server** - Full PXE boot protocol
@@ -45,8 +78,11 @@ chmod +x install_termux.sh && ./install_termux.sh
 
 - Android device with **Termux** installed
 - **Python 3.6+** (installed automatically)
-- **WiFi connection** (same network as target PC)
+- **WiFi connection** (same network as target PC) OR **Universal Network Bridge**
 - **Target PC** with PXE boot support
+
+### 🚀 **NEW: PC Ethernet + Mobile WiFi Method**
+Use your phone's WiFi while PC uses ethernet - bridges different network segments automatically!
 
 ---
 
@@ -214,19 +250,22 @@ See [COMPLETE_GUIDE.md](COMPLETE_GUIDE.md) for detailed troubleshooting.
 
 ```
 termux-pxe-boot/
-├── termux_pxe_boot.py      # Main server (complete implementation)
-├── install_termux.sh        # One-click installer
-├── run_termux.sh            # Server launcher
-├── test_server.sh           # Test suite (10 tests)
-├── uninstall_termux.sh      # Clean uninstaller
-├── START_HERE.md            # Quick start guide
-├── QUICKSTART.md            # Command reference
-├── COMPLETE_GUIDE.md        # Full documentation
-├── README_TERMUX.md         # Technical docs
-├── CHANGELOG.md             # Version history
-├── LICENSE                  # MIT License
-├── .gitignore              # Git ignore rules
-└── requirements.txt         # Python dependencies (reference only)
+├── termux_pxe_boot.py          # Main PXE server (complete implementation)
+├── UNIVERSAL_NETWORK_BRIDGE.py # 🌉 Universal Network Bridge System
+├── UNIVERSAL_NETWORK_BRIDGE_README.md # Bridge system documentation
+├── install_termux.sh            # One-click installer
+├── run_termux.sh                # Server launcher
+├── test_server.sh               # Test suite (10 tests)
+├── validate_bridge_system.py    # Bridge system validation
+├── uninstall_termux.sh          # Clean uninstaller
+├── START_HERE.md                # Quick start guide
+├── QUICKSTART.md                # Command reference
+├── COMPLETE_GUIDE.md            # Full documentation
+├── README_TERMUX.md             # Technical docs
+├── CHANGELOG.md                 # Version history
+├── LICENSE                      # MIT License
+├── .gitignore                  # Git ignore rules
+└── requirements.txt             # Python dependencies (reference only)
 ```
 
 ---
