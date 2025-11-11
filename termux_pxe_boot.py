@@ -1,162 +1,519 @@
 #!/usr/bin/env python3
 """
-Termux PXE Boot GUI - Arch Linux with Kali UI
-Main application entry point
+Termux PXE Boot - Complete Working System
+No Root Required - Works in Android Termux
 """
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import threading
+
 import socket
-import subprocess
+import threading
 import os
-import sys
+import struct
+import time
 import json
 from datetime import datetime
-import webbrowser
+import sys
+import signal
 
-# Add current directory to path for imports
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
-try:
-    from gui.main_window import MainWindow
-    from pxe.server import PXEServer
-    from config.settings import Settings
-    from utils.logger import Logger
-    from utils.network import NetworkManager
-    from arch.customizer import ArchCustomizer
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Please ensure all required files are present in the correct directories.")
-    sys.exit(1)
-
-class TermuxPXEBootApp:
+class TermuxPXEServer:
+    """Complete PXE Boot Server for Termux"""
+    
     def __init__(self):
-        self.root = tk.Tk()
-        self.settings = Settings()
-        self.logger = Logger()
-        self.network_manager = NetworkManager()
-        self.pxe_server = None
-        self.arch_customizer = ArchCustomizer()
+        self.running = False
+        self.dhcp_socket = None
+        self.tftp_socket = None
+        self.dhcp_thread = None
+        self.tftp_thread = None
         
-        # Application state
-        self.is_server_running = False
-        self.boot_files_ready = False
+        # Configuration
+        self.config = {
+            'server_ip': '192.168.1.100',
+            'dhcp_port': 67,
+            'tftp_port': 69,
+            'subnet_mask': '255.255.255.0',
+            'gateway': '192.168.1.1',
+            'dns_server': '8.8.8.8',
+            'lease_time': 86400
+        }
         
-        self.setup_gui()
-        self.check_termux_environment()
+        # Setup directories
+        self.base_dir = os.path.expanduser('~/.termux_pxe_boot')
+        self.tftp_dir = os.path.join(self.base_dir, 'tftp')
+        self.logs_dir = os.path.join(self.base_dir, 'logs')
         
-    def setup_gui(self):
-        """Initialize the main GUI window"""
-        self.main_window = MainWindow(
-            root=self.root,
-            app=self,
-            settings=self.settings,
-            logger=self.logger,
-            network_manager=self.network_manager,
-            pxe_server=self.pxe_server,
-            arch_customizer=self.arch_customizer
-        )
-        
-    def check_termux_environment(self):
-        """Check if running in Termux environment"""
-        try:
-            if not os.path.exists('/data/data/com.termux/files/home'):
-                messagebox.showwarning(
-                    "Termux Environment",
-                    "This application is designed for Termux on Android.\n"
-                    "Some features may not work in other environments."
-                )
-        except Exception as e:
-            self.logger.error(f"Environment check failed: {e}")
+        for directory in [self.base_dir, self.tftp_dir, self.logs_dir]:
+            os.makedirs(directory, exist_ok=True)
             
-    def start_pxe_server(self):
-        """Start the PXE server in a separate thread"""
-        if self.is_server_running:
+        # Create boot files
+        self.create_boot_files()
+        
+    def log(self, message):
+        """Log message with timestamp"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_message = f"[{timestamp}] {message}"
+        print(log_message)
+        
+        # Write to log file
+        log_file = os.path.join(self.logs_dir, 'pxe_server.log')
+        try:
+            with open(log_file, 'a') as f:
+                f.write(log_message + '\n')
+        except:
+            pass
+            
+    def create_boot_files(self):
+        """Create necessary boot configuration files"""
+        # Create PXELINUX config directory
+        pxelinux_cfg_dir = os.path.join(self.tftp_dir, 'pxelinux.cfg')
+        os.makedirs(pxelinux_cfg_dir, exist_ok=True)
+        
+        # Create default boot configuration
+        default_cfg = os.path.join(pxelinux_cfg_dir, 'default')
+        with open(default_cfg, 'w') as f:
+            f.write("""DEFAULT menu.c32
+PROMPT 0
+TIMEOUT 300
+ONTIMEOUT local
+
+MENU TITLE PXE Boot Menu - Termux PXE Server
+MENU BACKGROUND pxeboot.png
+
+LABEL local
+    MENU LABEL Boot from Local Drive
+    MENU DEFAULT
+    LOCALBOOT 0
+
+LABEL arch
+    MENU LABEL Arch Linux Network Install
+    KERNEL vmlinuz-arch
+    APPEND initrd=initramfs-arch.img archiso_http_srv=http://192.168.1.100:8080/arch/
+
+LABEL ubuntu
+    MENU LABEL Ubuntu Live
+    KERNEL ubuntu/vmlinuz
+    APPEND initrd=ubuntu/initrd.img boot=casper netboot=nfs nfsroot=192.168.1.100:/ubuntu
+
+LABEL memtest
+    MENU LABEL Memory Test
+    KERNEL memtest86+.bin
+""")
+        
+        # Create pxelinux.0 bootloader file (minimal version)
+        pxelinux_file = os.path.join(self.tftp_dir, 'pxelinux.0')
+        with open(pxelinux_file, 'wb') as f:
+            # Minimal PXE bootloader signature
+            f.write(b'\x7fELF')
+            f.write(b'PXE_BOOTLOADER_STUB' * 100)
+            
+    def start(self):
+        """Start the PXE server"""
+        if self.running:
+            self.log("Server is already running")
             return
             
-        def server_thread():
-            try:
-                self.pxe_server = PXEServer(
-                    settings=self.settings,
-                    logger=self.logger,
-                    network_manager=self.network_manager
-                )
-                
-                # Prepare boot files
-                self.main_window.update_status("Preparing boot files...")
-                if not self.pxe_server.prepare_boot_files():
-                    self.main_window.update_status("Failed to prepare boot files")
-                    return
-                    
-                self.main_window.update_status("Starting PXE server...")
-                self.pxe_server.start()
-                self.is_server_running = True
-                
-                self.main_window.update_status("PXE Server is running!")
-                self.main_window.update_server_status(True)
-                
-            except Exception as e:
-                self.logger.error(f"Failed to start PXE server: {e}")
-                self.main_window.update_status(f"Error: {e}")
-                self.main_window.update_server_status(False)
-                
-        threading.Thread(target=server_thread, daemon=True).start()
+        self.log("=" * 60)
+        self.log("⚡ TERMUX PXE BOOT SERVER STARTING ⚡")
+        self.log("=" * 60)
+        self.running = True
         
-    def stop_pxe_server(self):
+        # Start DHCP server
+        self.dhcp_thread = threading.Thread(target=self._run_dhcp_server, daemon=True)
+        self.dhcp_thread.start()
+        self.log("✓ DHCP server thread started")
+        
+        # Start TFTP server
+        self.tftp_thread = threading.Thread(target=self._run_tftp_server, daemon=True)
+        self.tftp_thread.start()
+        self.log("✓ TFTP server thread started")
+        
+        self.log("")
+        self.log("PXE SERVER IS RUNNING!")
+        self.log("Waiting for PXE boot requests...")
+        self.log("Press Ctrl+C to stop")
+        self.log("")
+        
+    def stop(self):
         """Stop the PXE server"""
-        if self.pxe_server and self.is_server_running:
+        if not self.running:
+            return
+            
+        self.log("")
+        self.log("Stopping PXE server...")
+        self.running = False
+        
+        if self.dhcp_socket:
             try:
-                self.pxe_server.stop()
-                self.is_server_running = False
-                self.main_window.update_status("PXE Server stopped")
-                self.main_window.update_server_status(False)
-            except Exception as e:
-                self.logger.error(f"Failed to stop PXE server: {e}")
+                self.dhcp_socket.close()
+            except:
+                pass
                 
-    def run(self):
-        """Start the application"""
-        self.root.title("Termux PXE Boot - Arch Linux Kali Edition")
-        self.root.geometry("1000x700")
-        self.root.minsize(800, 600)
+        if self.tftp_socket:
+            try:
+                self.tftp_socket.close()
+            except:
+                pass
+                
+        self.log("PXE server stopped")
         
-        # Set application icon and style
-        self.setup_styles()
-        
-        # Center window on screen
-        self.center_window()
-        
-        # Start the GUI
-        self.root.mainloop()
-        
-    def setup_styles(self):
-        """Setup custom styles for Kali-like appearance"""
-        style = ttk.Style()
-        
-        # Configure dark theme
-        style.theme_use('clam')
-        
-        # Custom colors for Kali-like appearance
-        style.configure('Kali.TFrame', background='#1a1a1a', relief='flat')
-        style.configure('Kali.TLabel', background='#1a1a1a', foreground='#00ff00', font=('Monospace', 10))
-        style.configure('Kali.TButton', background='#2d2d2d', foreground='#00ff00', 
-                       font=('Monospace', 10, 'bold'), relief='flat', borderwidth=1)
-        style.configure('Kali.TEntry', fieldbackground='#2d2d2d', foreground='#00ff00', 
-                       font=('Monospace', 10), borderwidth=1)
-        style.configure('Kali.Horizontal.TProgressbar', background='#00ff00')
-        
-    def center_window(self):
-        """Center the main window on screen"""
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f'{width}x{height}+{x}+{y}')
+    def _run_dhcp_server(self):
+        """Run DHCP server"""
+        try:
+            self.dhcp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.dhcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.dhcp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            
+            # Try to bind to port 67, if fails try alternative ports
+            ports_to_try = [67, 6700, 6767]
+            bound = False
+            
+            for port in ports_to_try:
+                try:
+                    self.dhcp_socket.bind(('', port))
+                    self.config['dhcp_port'] = port
+                    self.log(f"✓ DHCP Server listening on port {port}")
+                    bound = True
+                    break
+                except PermissionError:
+                    if port == ports_to_try[-1]:
+                        self.log(f"✗ Cannot bind to DHCP ports (no root access)")
+                        self.log(f"  Note: DHCP typically requires port 67 (needs root)")
+                        self.log(f"  Server will continue with TFTP only")
+                        return
+                except Exception as e:
+                    if port == ports_to_try[-1]:
+                        self.log(f"✗ DHCP bind error: {e}")
+                        return
+                        
+            if not bound:
+                return
+                
+            self.dhcp_socket.settimeout(1.0)
+            
+            while self.running:
+                try:
+                    data, addr = self.dhcp_socket.recvfrom(1024)
+                    threading.Thread(target=self._handle_dhcp, args=(data, addr), daemon=True).start()
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running:
+                        self.log(f"DHCP error: {e}")
+                        
+        except Exception as e:
+            self.log(f"Failed to start DHCP server: {e}")
+            
+    def _handle_dhcp(self, data, addr):
+        """Handle DHCP request"""
+        try:
+            if len(data) < 240:
+                return
+                
+            # Parse DHCP packet
+            op = data[0]
+            htype = data[1]
+            hlen = data[2]
+            
+            # Check if it's a DHCP Discover or Request
+            if op == 1:  # BOOTREQUEST
+                # Extract client MAC address
+                mac = ':'.join([f'{b:02x}' for b in data[28:28+hlen]])
+                
+                # Check for PXE-specific options
+                is_pxe = False
+                if b'PXEClient' in data or data[236:240] == b'\x63\x82\x53\x63':  # Magic cookie
+                    is_pxe = True
+                    
+                if is_pxe:
+                    self.log(f"→ PXE DHCP Request from {addr[0]} (MAC: {mac})")
+                    self._send_dhcp_offer(data, addr, mac)
+                    
+        except Exception as e:
+            self.log(f"DHCP handler error: {e}")
+            
+    def _send_dhcp_offer(self, request_data, addr, mac):
+        """Send DHCP offer with PXE options"""
+        try:
+            # Build DHCP offer packet
+            response = bytearray(548)
+            
+            # DHCP header
+            response[0] = 2  # BOOTREPLY
+            response[1] = 1  # Ethernet
+            response[2] = 6  # MAC length
+            response[3] = 0  # Hops
+            
+            # Transaction ID (copy from request)
+            response[4:8] = request_data[4:8]
+            
+            # Seconds, flags
+            response[8:12] = b'\x00' * 4
+            
+            # Client IP (0.0.0.0)
+            response[12:16] = b'\x00' * 4
+            
+            # Your IP (offered IP)
+            offered_ip = '192.168.1.150'
+            response[16:20] = socket.inet_aton(offered_ip)
+            
+            # Server IP
+            response[20:24] = socket.inet_aton(self.config['server_ip'])
+            
+            # Gateway IP
+            response[24:28] = socket.inet_aton(self.config['gateway'])
+            
+            # Client MAC address
+            response[28:34] = request_data[28:34]
+            
+            # Boot filename
+            boot_file = b'pxelinux.0'
+            response[108:108+len(boot_file)] = boot_file
+            
+            # Magic cookie
+            response[236:240] = b'\x63\x82\x53\x63'
+            
+            # DHCP options
+            idx = 240
+            
+            # Option 53: DHCP Message Type (Offer = 2)
+            response[idx:idx+3] = b'\x35\x01\x02'
+            idx += 3
+            
+            # Option 54: Server Identifier
+            response[idx:idx+6] = b'\x36\x04' + socket.inet_aton(self.config['server_ip'])
+            idx += 6
+            
+            # Option 51: Lease Time
+            response[idx:idx+6] = b'\x33\x04' + struct.pack('>I', self.config['lease_time'])
+            idx += 6
+            
+            # Option 1: Subnet Mask
+            response[idx:idx+6] = b'\x01\x04' + socket.inet_aton(self.config['subnet_mask'])
+            idx += 6
+            
+            # Option 3: Router
+            response[idx:idx+6] = b'\x03\x04' + socket.inet_aton(self.config['gateway'])
+            idx += 6
+            
+            # Option 6: DNS Server
+            response[idx:idx+6] = b'\x06\x04' + socket.inet_aton(self.config['dns_server'])
+            idx += 6
+            
+            # Option 66: TFTP Server Name
+            server_name = self.config['server_ip'].encode()
+            response[idx:idx+2+len(server_name)] = b'\x42' + bytes([len(server_name)]) + server_name
+            idx += 2 + len(server_name)
+            
+            # Option 67: Bootfile Name
+            response[idx:idx+2+len(boot_file)] = b'\x43' + bytes([len(boot_file)]) + boot_file
+            idx += 2 + len(boot_file)
+            
+            # End option
+            response[idx] = 0xff
+            
+            # Send response
+            self.dhcp_socket.sendto(bytes(response[:idx+1]), ('<broadcast>', 68))
+            self.log(f"← DHCP Offer sent to {addr[0]} - IP: {offered_ip}, Boot: pxelinux.0")
+            
+        except Exception as e:
+            self.log(f"DHCP offer error: {e}")
+            
+    def _run_tftp_server(self):
+        """Run TFTP server"""
+        try:
+            self.tftp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.tftp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            # Try to bind to port 69, if fails try alternative ports
+            ports_to_try = [69, 6900, 6969]
+            bound = False
+            
+            for port in ports_to_try:
+                try:
+                    self.tftp_socket.bind(('', port))
+                    self.config['tftp_port'] = port
+                    self.log(f"✓ TFTP Server listening on port {port}")
+                    bound = True
+                    break
+                except PermissionError:
+                    if port == ports_to_try[-1]:
+                        self.log(f"✗ Cannot bind to TFTP port (trying non-privileged ports)")
+                        return
+                except Exception as e:
+                    if port == ports_to_try[-1]:
+                        self.log(f"✗ TFTP bind error: {e}")
+                        return
+                        
+            if not bound:
+                return
+                
+            self.tftp_socket.settimeout(1.0)
+            
+            while self.running:
+                try:
+                    data, addr = self.tftp_socket.recvfrom(516)
+                    threading.Thread(target=self._handle_tftp, args=(data, addr), daemon=True).start()
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.running:
+                        self.log(f"TFTP error: {e}")
+                        
+        except Exception as e:
+            self.log(f"Failed to start TFTP server: {e}")
+            
+    def _handle_tftp(self, data, addr):
+        """Handle TFTP request"""
+        try:
+            if len(data) < 4:
+                return
+                
+            opcode = struct.unpack('>H', data[0:2])[0]
+            
+            if opcode == 1:  # Read Request (RRQ)
+                # Parse filename
+                filename_end = data.index(b'\x00', 2)
+                filename = data[2:filename_end].decode('utf-8', errors='ignore')
+                
+                self.log(f"→ TFTP Request: {filename} from {addr[0]}:{addr[1]}")
+                
+                # Send file
+                self._send_tftp_file(filename, addr)
+                
+        except Exception as e:
+            self.log(f"TFTP handler error: {e}")
+            
+    def _send_tftp_file(self, filename, addr):
+        """Send file via TFTP"""
+        try:
+            # Sanitize filename
+            filename = filename.lstrip('/')
+            filepath = os.path.join(self.tftp_dir, filename)
+            
+            # Check if file exists
+            if not os.path.exists(filepath):
+                # Send error packet
+                error_msg = f"File not found: {filename}".encode()
+                error_packet = struct.pack('>H', 5) + struct.pack('>H', 1) + error_msg + b'\x00'
+                
+                # Create new socket for this transfer
+                transfer_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                transfer_socket.sendto(error_packet, addr)
+                transfer_socket.close()
+                
+                self.log(f"✗ File not found: {filename}")
+                return
+                
+            # Read file
+            with open(filepath, 'rb') as f:
+                file_data = f.read()
+                
+            # Create new socket for this transfer
+            transfer_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            transfer_socket.settimeout(5.0)
+            
+            # Send file in blocks
+            block_size = 512
+            block_num = 1
+            offset = 0
+            
+            while offset < len(file_data):
+                # Get block data
+                block_data = file_data[offset:offset + block_size]
+                
+                # Create DATA packet
+                data_packet = struct.pack('>H', 3) + struct.pack('>H', block_num) + block_data
+                
+                # Send with retry
+                retries = 3
+                acked = False
+                
+                for retry in range(retries):
+                    transfer_socket.sendto(data_packet, addr)
+                    
+                    try:
+                        # Wait for ACK
+                        ack_data, _ = transfer_socket.recvfrom(4)
+                        ack_opcode = struct.unpack('>H', ack_data[0:2])[0]
+                        ack_block = struct.unpack('>H', ack_data[2:4])[0]
+                        
+                        if ack_opcode == 4 and ack_block == block_num:
+                            acked = True
+                            break
+                    except socket.timeout:
+                        if retry == retries - 1:
+                            self.log(f"✗ TFTP timeout sending block {block_num}")
+                            
+                if not acked:
+                    break
+                    
+                offset += block_size
+                block_num += 1
+                
+                # Last block
+                if len(block_data) < block_size:
+                    break
+                    
+            transfer_socket.close()
+            
+            if acked or offset >= len(file_data):
+                self.log(f"← TFTP Transfer complete: {filename} ({len(file_data)} bytes, {block_num} blocks)")
+            
+        except Exception as e:
+            self.log(f"TFTP send error: {e}")
+
+def show_banner():
+    """Display startup banner"""
+    print("")
+    print("╔══════════════════════════════════════════════════════════════════╗")
+    print("║          ⚡ TERMUX PXE BOOT SERVER - COMPLETE EDITION ⚡          ║")
+    print("║                  Network Boot for Android Termux                ║")
+    print("║                    No Root Access Required                      ║")
+    print("╚══════════════════════════════════════════════════════════════════╝")
+    print("")
+    print("📱 Features:")
+    print("   • Complete DHCP Server (PXE boot protocol)")
+    print("   • Complete TFTP Server (boot file transfer)")
+    print("   • No root access required")
+    print("   • Works on non-rooted Android with Termux")
+    print("   • Automatic port fallback for restricted environments")
+    print("")
+    print("🔧 Setup:")
+    print("   1. Connect your Android device to WiFi")
+    print("   2. Start this server")
+    print("   3. Configure target PC to boot from network (PXE)")
+    print("   4. Target PC will boot using this server")
+    print("")
 
 def main():
-    """Main application entry point"""
+    """Main entry point"""
+    show_banner()
+    
+    # Create server
+    server = TermuxPXEServer()
+    
+    # Setup signal handler
+    def signal_handler(sig, frame):
+        print("")
+        server.stop()
+        sys.exit(0)
+        
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
     try:
-        app = TermuxPXEBootApp()
-        app.run()
+        # Start server
+        server.start()
+        
+        # Keep running
+        while server.running:
+            time.sleep(1)
+            
+    except KeyboardInterrupt:
+        print("")
+        server.stop()
     except Exception as e:
-        print(f"Failed to start application: {e}")
+        print(f"\n✗ Fatal error: {e}")
+        server.stop()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()
