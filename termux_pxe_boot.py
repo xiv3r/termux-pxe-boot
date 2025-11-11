@@ -377,6 +377,10 @@ Access:
         self.log("=" * 60)
         self.log("⚡ TERMUX PXE BOOT SERVER STARTING ⚡")
         self.log("=" * 60)
+        
+        # Show network diagnostics
+        self._show_network_diagnostics()
+        
         self.running = True
         
         # Start DHCP server
@@ -390,9 +394,68 @@ Access:
         self.log("✓ TFTP server thread started")
         
         self.log("")
-        self.log("PXE SERVER IS RUNNING!")
-        self.log("Waiting for PXE boot requests...")
+        self.log("🎉 PXE SERVER IS RUNNING!")
+        self.log("══════════════════════════")
+        self.log(f"🌐 Server IP: {self.config['server_ip']}")
+        self.log(f"🔌 DHCP Port: {self.config['dhcp_port']}")
+        self.log(f"📁 TFTP Port: {self.config['tftp_port']}")
+        self.log("══════════════════════════")
+        self.log("🔍 Waiting for PXE boot requests...")
+        self.log("💡 Make sure your PC is on the same network!")
+        self.log("⚠️  If no requests appear, check network connectivity")
+        self.log("")
+        self.log("🖥️  ON YOUR PC:")
+        self.log("1. Enter BIOS/UEFI (F2, F12, Del)")
+        self.log("2. Enable PXE Boot / Network Boot")
+        self.log("3. Set Network Boot as first priority")
+        self.log("4. Save and reboot")
+        self.log("")
         self.log("Press Ctrl+C to stop")
+        self.log("")
+        
+    def _show_network_diagnostics(self):
+        """Show network diagnostic information"""
+        import subprocess
+        
+        self.log("🔍 NETWORK DIAGNOSTICS")
+        self.log("=" * 30)
+        
+        # Get current IP
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
+            self.log(f"📍 Your IP Address: {local_ip}")
+        except:
+            self.log("📍 Your IP Address: Unable to detect")
+        
+        # Check subnet
+        try:
+            result = subprocess.run(['ip', 'addr', 'show'], capture_output=True, text=True)
+            for line in result.stdout.split('\n'):
+                if 'inet ' in line and '127.0.0.1' not in line:
+                    parts = line.strip().split()
+                    if len(parts) >= 2:
+                        self.log(f"🌐 Network Interface: {line.strip()}")
+        except:
+            pass
+        
+        # Test connectivity
+        self.log("🌐 Testing connectivity to common subnets...")
+        test_ips = ['192.168.1.1', '192.168.0.1', '10.0.0.1', '192.168.1.100']
+        for ip in test_ips:
+            try:
+                result = subprocess.run(['ping', '-c', '1', '-W', '1', ip],
+                                      capture_output=True, text=True, timeout=2)
+                if result.returncode == 0:
+                    self.log(f"   ✅ {ip} - Reachable")
+                else:
+                    self.log(f"   ❌ {ip} - Not reachable")
+            except:
+                self.log(f"   ❓ {ip} - Test failed")
+        
+        self.log("💡 For PXE to work, your PC must be on the SAME network!")
         self.log("")
         
     def stop(self):
