@@ -1,9 +1,9 @@
 """
 Main GUI Window for Termux PXE Boot
-Cross-platform compatible GUI with modern interface
+Integrated with working termux_pxe_boot.py
 """
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, scrolledtext
 import threading
 import os
 import sys
@@ -11,38 +11,30 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-# Add current directory to Python path for imports
+# Add parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Import the working PXE server
 try:
-    from pxe.server import PXEServer
-    from config.settings import Settings
-    from utils.logger import Logger
-    from utils.network import NetworkManager
-    from arch.customizer import ArchCustomizer
-    from optimizations.performance import PerformanceOptimizer
+    from termux_pxe_boot import TermuxPXEServer
+    PXE_AVAILABLE = True
 except ImportError as e:
-    print(f"Import error: {e}")
-    print("Please ensure all modules are properly installed.")
+    print(f"Warning: Could not import termux_pxe_boot: {e}")
+    PXE_AVAILABLE = False
 
-class MainWindow:
-    def __init__(self, root, app, settings=None, logger=None, network_manager=None, pxe_server=None, arch_customizer=None, performance_optimizer=None):
-        self.root = root
-        self.app = app
-        self.settings = settings or Settings()
-        self.logger = logger or Logger()
-        self.network_manager = network_manager or NetworkManager()
-        self.pxe_server = pxe_server
-        self.arch_customizer = arch_customizer or ArchCustomizer(self.settings, self.logger)
-        self.performance_optimizer = performance_optimizer or PerformanceOptimizer(self.settings, self.logger)
+class PXEGUI:
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Termux PXE Boot Server - Steroid Edition")
+        self.root.geometry("900x700")
+        self.root.configure(bg='#0a0a0a')
         
-        # Server state
-        self.is_server_running = False
-        self.server_status = "STOPPED"
+        # Server instance
+        self.pxe_server = None
+        self.server_running = False
         
-        # Performance monitoring
-        self.monitoring_active = False
-        self.performance_data = {}
+        # Server logs
+        self.log_buffer = deque(maxlen=1000)
         
         # Create GUI
         self.setup_styles()
@@ -50,19 +42,10 @@ class MainWindow:
         self.center_window()
         
         # Start background tasks
-        self.update_network_info()
+        self.update_server_status()
         
     def setup_styles(self):
-        """Setup modern, Kali-inspired styling"""
-        style = ttk.Style()
-        
-        # Try to use modern theme
-        try:
-            style.theme_use('clam')
-        except:
-            style.theme_use('default')
-            
-        # Configure custom styles for dark theme
+        """Setup dark theme styling"""
         self.colors = {
             'bg': '#0a0a0a',
             'fg': '#00ff00',
@@ -73,405 +56,219 @@ class MainWindow:
             'success': '#00ff88'
         }
         
-        # Override styles
-        style.configure('Dark.TFrame', background=self.colors['bg'], relief='flat', borderwidth=0)
-        style.configure('Dark.TLabel', background=self.colors['bg'], foreground=self.colors['fg'], 
-                       font=('JetBrains Mono', 10))
-        style.configure('Dark.TButton', background=self.colors['secondary'], 
-                       foreground=self.colors['fg'], font=('JetBrains Mono', 10, 'bold'),
-                       relief='flat', borderwidth=1)
-        style.configure('Dark.TButton:active', background=self.colors['accent'])
-        style.configure('Dark.TEntry', fieldbackground=self.colors['secondary'], 
-                       foreground=self.colors['fg'], font=('JetBrains Mono', 10))
-        style.configure('Dark.Horizontal.TProgressbar', background=self.colors['accent'])
-        style.configure('Dark.TNotebook', background=self.colors['bg'])
-        style.configure('Dark.TNotebook.Tab', background=self.colors['secondary'], 
-                       foreground=self.colors['fg'], padding=[10, 5])
+        # Configure root
+        self.root.configure(bg=self.colors['bg'])
         
     def create_interface(self):
         """Create the main interface"""
         # Main container
-        main_container = ttk.Frame(self.root, style='Dark.TFrame')
+        main_container = tk.Frame(self.root, bg=self.colors['bg'])
         main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Title section
         self.create_title_section(main_container)
         
-        # Tab control for different sections
-        self.create_notebook(main_container)
+        # Control panel
+        self.create_control_panel(main_container)
         
-        # Status bar
-        self.create_status_bar(main_container)
+        # Status section
+        self.create_status_section(main_container)
+        
+        # Log section
+        self.create_log_section(main_container)
+        
+        # Boot instructions
+        self.create_instructions_section(main_container)
         
     def create_title_section(self, parent):
         """Create the title section"""
-        title_frame = ttk.Frame(parent, style='Dark.TFrame')
+        title_frame = tk.Frame(parent, bg=self.colors['bg'])
         title_frame.pack(fill=tk.X, pady=(0, 15))
         
         # Main title
-        title_label = ttk.Label(
+        title_label = tk.Label(
             title_frame,
             text="⚡ TERMUX PXE BOOT - STEROID EDITION ⚡",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 20, 'bold')
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 18, 'bold')
         )
         title_label.pack()
         
         # Subtitle
-        subtitle_label = ttk.Label(
+        subtitle_label = tk.Label(
             title_frame,
-            text="Cross-Platform Network Boot Server - Performance Optimized",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 12)
+            text="Complete Network Boot Server with Arch Linux Support",
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 10)
         )
         subtitle_label.pack()
         
-        # Version and platform info
-        info_text = f"v3.0.0 - Steroid Edition | Platform: {self.detect_platform()} | Python: {sys.version.split()[0]}"
-        info_label = ttk.Label(
+        # Platform info
+        platform_info = f"Platform: {self.get_platform()} | Python: {sys.version.split()[0]}"
+        info_label = tk.Label(
             title_frame,
-            text=info_text,
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 9)
+            text=platform_info,
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 8)
         )
         info_label.pack()
         
-    def detect_platform(self):
-        """Detect the current platform"""
-        import platform
-        system = platform.system()
-        if system == "Linux":
+    def get_platform(self):
+        """Detect platform"""
+        system = sys.platform
+        if system == "linux":
             if os.path.exists("/data/data/com.termux/files/home"):
                 return "Termux (Android)"
             else:
                 return "Linux"
-        elif system == "Darwin":
+        elif system == "darwin":
             return "macOS"
-        elif system == "Windows":
+        elif system == "win32":
             return "Windows"
         else:
             return system
             
-    def create_notebook(self, parent):
-        """Create notebook with tabs for different functions"""
-        self.notebook = ttk.Notebook(parent, style='Dark.TNotebook')
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Server Control Tab
-        self.server_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.server_frame, text="🚀 Server Control")
-        self.create_server_tab()
-        
-        # Network Config Tab
-        self.network_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.network_frame, text="🌐 Network Config")
-        self.create_network_tab()
-        
-        # Performance Tab
-        self.performance_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.performance_frame, text="⚡ Performance")
-        self.create_performance_tab()
-        
-        # Arch Customization Tab
-        self.arch_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.arch_frame, text="🎨 Arch Customization")
-        self.create_arch_tab()
-        
-        # Monitoring Tab
-        self.monitor_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.monitor_frame, text="📊 Monitoring")
-        self.create_monitoring_tab()
-        
-    def create_server_tab(self):
-        """Create server control tab"""
-        # Server control section
-        control_frame = ttk.LabelFrame(self.server_frame, text="Server Control", style='Dark.TFrame')
-        control_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Start/Stop buttons
-        buttons_frame = ttk.Frame(control_frame, style='Dark.TFrame')
-        buttons_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.start_button = ttk.Button(
-            buttons_frame,
-            text="▶️ START PXE SERVER",
-            command=self.start_server,
-            style='Dark.TButton'
+    def create_control_panel(self, parent):
+        """Create control panel"""
+        control_frame = tk.LabelFrame(
+            parent, 
+            text="Server Control", 
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 12, 'bold')
         )
-        self.start_button.pack(side=tk.LEFT, padx=(0, 10))
+        control_frame.pack(fill=tk.X, pady=10)
         
-        self.stop_button = ttk.Button(
+        # Buttons
+        buttons_frame = tk.Frame(control_frame, bg=self.colors['bg'])
+        buttons_frame.pack(pady=10)
+        
+        # Start button
+        self.start_button = tk.Button(
+            buttons_frame,
+            text="🚀 START PXE SERVER",
+            command=self.start_server,
+            bg=self.colors['success'],
+            fg='black',
+            font=('Courier', 12, 'bold'),
+            padx=20,
+            pady=10
+        )
+        self.start_button.pack(side=tk.LEFT, padx=5)
+        
+        # Stop button
+        self.stop_button = tk.Button(
             buttons_frame,
             text="⏹️ STOP SERVER",
             command=self.stop_server,
-            style='Dark.TButton',
+            bg=self.colors['error'],
+            fg='white',
+            font=('Courier', 12, 'bold'),
+            padx=20,
+            pady=10,
             state=tk.DISABLED
         )
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
+        self.stop_button.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(
+        # Status
+        self.status_label = tk.Label(
             buttons_frame,
-            text="🖥️ Boot Instructions",
-            command=self.show_boot_instructions,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT)
-        
-        # Status display
-        status_frame = ttk.Frame(control_frame, style='Dark.TFrame')
-        status_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        ttk.Label(status_frame, text="Status:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.status_label = ttk.Label(
-            status_frame,
             text="● STOPPED",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 12, 'bold')
+            bg=self.colors['bg'],
+            fg=self.colors['error'],
+            font=('Courier', 12, 'bold')
         )
-        self.status_label.pack(side=tk.LEFT, padx=(10, 0))
+        self.status_label.pack(side=tk.LEFT, padx=20)
         
-        # Server information
-        info_frame = ttk.LabelFrame(self.server_frame, text="Server Information", style='Dark.TFrame')
-        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create scrolled text for server info
-        self.server_info = tk.Text(
-            info_frame,
-            height=10,
-            bg=self.colors['secondary'],
+    def create_status_section(self, parent):
+        """Create status section"""
+        status_frame = tk.LabelFrame(
+            parent, 
+            text="Server Information", 
+            bg=self.colors['bg'],
             fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            insertbackground=self.colors['fg'],
-            selectbackground=self.colors['accent'],
-            wrap=tk.WORD
+            font=('Courier', 12, 'bold')
         )
+        status_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        # Scrollbar for server info
-        info_scrollbar = ttk.Scrollbar(info_frame, orient=tk.VERTICAL, command=self.server_info.yview)
-        self.server_info.configure(yscrollcommand=info_scrollbar.set)
-        
-        self.server_info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        info_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Initialize server info
-        self.update_server_info()
-        
-    def create_network_tab(self):
-        """Create network configuration tab"""
-        # Network interface selection
-        interface_frame = ttk.LabelFrame(self.network_frame, text="Network Interface", style='Dark.TFrame')
-        interface_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Interface dropdown
-        interface_select_frame = ttk.Frame(interface_frame, style='Dark.TFrame')
-        interface_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(interface_select_frame, text="Interface:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.interface_var = tk.StringVar()
-        self.interface_combo = ttk.Combobox(
-            interface_select_frame,
-            textvariable=self.interface_var,
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        self.interface_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # IP Configuration
-        ip_frame = ttk.LabelFrame(self.network_frame, text="IP Configuration", style='Dark.TFrame')
-        ip_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Server IP
-        server_ip_frame = ttk.Frame(ip_frame, style='Dark.TFrame')
-        server_ip_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(server_ip_frame, text="Server IP:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.server_ip_var = tk.StringVar(value="192.168.1.100")
-        ttk.Entry(server_ip_frame, textvariable=self.server_ip_var, style='Dark.TEntry', width=15).pack(side=tk.LEFT, padx=(10, 0))
-        
-        # DHCP Range
-        dhcp_frame = ttk.Frame(ip_frame, style='Dark.TFrame')
-        dhcp_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(dhcp_frame, text="DHCP Range:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.dhcp_start_var = tk.StringVar(value="192.168.1.50")
-        self.dhcp_end_var = tk.StringVar(value="192.168.1.200")
-        
-        ttk.Entry(dhcp_frame, textvariable=self.dhcp_start_var, style='Dark.TEntry', width=12).pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Label(dhcp_frame, text="to", style='Dark.TLabel').pack(side=tk.LEFT)
-        ttk.Entry(dhcp_frame, textvariable=self.dhcp_end_var, style='Dark.TEntry', width=12).pack(side=tk.LEFT, padx=5)
-        
-        # Apply button
-        ttk.Button(
-            ip_frame,
-            text="💾 Apply Network Config",
-            command=self.apply_network_config,
-            style='Dark.TButton'
-        ).pack(pady=10)
-        
-    def create_performance_tab(self):
-        """Create performance optimization tab"""
-        # Performance profile selection
-        profile_frame = ttk.LabelFrame(self.performance_frame, text="Performance Profile", style='Dark.TFrame')
-        profile_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        profile_select_frame = ttk.Frame(profile_frame, style='Dark.TFrame')
-        profile_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(profile_select_frame, text="Profile:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.performance_var = tk.StringVar(value="Maximum")
-        profile_combo = ttk.Combobox(
-            profile_select_frame,
-            textvariable=self.performance_var,
-            values=["Maximum", "Gaming", "Balanced", "Minimal"],
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        profile_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # Performance controls
-        controls_frame = ttk.Frame(profile_frame, style='Dark.TFrame')
-        controls_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(
-            controls_frame,
-            text="⚡ Apply Performance",
-            command=self.apply_performance,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            controls_frame,
-            text="📊 Benchmark",
-            command=self.run_benchmark,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT)
-        
-        # Performance description
-        self.performance_desc = tk.Text(
-            profile_frame,
-            height=6,
-            bg=self.colors['secondary'],
-            fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            wrap=tk.WORD,
-            state=tk.DISABLED
-        )
-        self.performance_desc.pack(fill=tk.X, padx=10, pady=10)
-        
-    def create_arch_tab(self):
-        """Create Arch Linux customization tab"""
-        # Theme selection
-        theme_frame = ttk.LabelFrame(self.arch_frame, text="Theme & Customization", style='Dark.TFrame')
-        theme_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        theme_select_frame = ttk.Frame(theme_frame, style='Dark.TFrame')
-        theme_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(theme_select_frame, text="Theme:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.theme_var = tk.StringVar(value="Kali Dark")
-        theme_combo = ttk.Combobox(
-            theme_select_frame,
-            textvariable=self.theme_var,
-            values=["Kali Dark", "Cyberpunk", "Matrix", "Neon Green"],
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        theme_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # Tool selection
-        tools_frame = ttk.LabelFrame(self.arch_frame, text="Tool Package", style='Dark.TFrame')
-        tools_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        tools_select_frame = ttk.Frame(tools_frame, style='Dark.TFrame')
-        tools_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(tools_select_frame, text="Tools:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.tools_var = tk.StringVar(value="Kali Tools + Performance")
-        tools_combo = ttk.Combobox(
-            tools_select_frame,
-            textvariable=self.tools_var,
-            values=["Kali Tools + Performance", "Full Kali Suite", "Pentesting Essentials", "Custom Selection"],
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        tools_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # Customization controls
-        controls_frame = ttk.Frame(theme_frame, style='Dark.TFrame')
-        controls_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Button(
-            controls_frame,
-            text="🎨 Apply Customization",
-            command=self.apply_customization,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            controls_frame,
-            text="📋 Preview Config",
-            command=self.preview_config,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT)
-        
-    def create_monitoring_tab(self):
-        """Create monitoring tab"""
-        # System information
-        info_frame = ttk.LabelFrame(self.monitor_frame, text="System Information", style='Dark.TFrame')
-        info_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # System info display
-        self.system_info = tk.Text(
-            info_frame,
+        # Information display
+        self.status_text = scrolledtext.ScrolledText(
+            status_frame,
             height=8,
             bg=self.colors['secondary'],
             fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            wrap=tk.WORD,
-            state=tk.DISABLED
+            font=('Courier', 9),
+            wrap=tk.WORD
         )
-        self.system_info.pack(fill=tk.X, padx=10, pady=10)
+        self.status_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Performance metrics
-        metrics_frame = ttk.LabelFrame(self.monitor_frame, text="Performance Metrics", style='Dark.TFrame')
-        metrics_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Initialize status
+        self.update_status_display()
         
-        # Metrics display
-        self.metrics_display = tk.Text(
-            metrics_frame,
-            height=10,
+    def create_log_section(self, parent):
+        """Create log section"""
+        log_frame = tk.LabelFrame(
+            parent, 
+            text="Server Logs", 
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 12, 'bold')
+        )
+        log_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        # Log display
+        self.log_text = scrolledtext.ScrolledText(
+            log_frame,
+            height=6,
             bg=self.colors['secondary'],
             fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            wrap=tk.WORD,
-            state=tk.DISABLED
+            font=('Courier', 8),
+            wrap=tk.WORD
         )
-        self.metrics_display.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-    def create_status_bar(self, parent):
-        """Create the status bar"""
-        self.status_bar = ttk.Frame(parent, style='Dark.TFrame')
-        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        # Status text
-        self.status_text = ttk.Label(
-            self.status_bar,
-            text="Ready",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 9)
+    def create_instructions_section(self, parent):
+        """Create instructions section"""
+        instructions_frame = tk.LabelFrame(
+            parent, 
+            text="Boot Instructions", 
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 12, 'bold')
         )
-        self.status_text.pack(side=tk.LEFT, padx=10, pady=5)
+        instructions_frame.pack(fill=tk.X, pady=10)
         
-        # Performance indicator
-        self.perf_indicator = ttk.Label(
-            self.status_bar,
-            text="⚡",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 12)
+        instructions_text = """🖥️ PXE BOOT INSTRUCTIONS:
+        
+1. Start the PXE server (green button above)
+2. Ensure target PC is on same network
+3. Enter BIOS/UEFI (F2, F12, Del keys)
+4. Enable Network Boot / PXE Boot
+5. Set Network Boot as first priority
+6. Save and reboot target PC
+7. PC will connect to our PXE server
+
+⚠️ IMPORTANT:
+• No other DHCP servers should be running
+• Network must be the same subnet
+• Server IP is auto-detected"""
+        
+        instructions_label = tk.Label(
+            instructions_frame,
+            text=instructions_text,
+            bg=self.colors['bg'],
+            fg=self.colors['fg'],
+            font=('Courier', 9),
+            justify=tk.LEFT,
+            anchor='w'
         )
-        self.perf_indicator.pack(side=tk.RIGHT, padx=10, pady=5)
+        instructions_label.pack(padx=10, pady=10)
         
     def center_window(self):
-        """Center the window on screen"""
+        """Center the window"""
         self.root.update_idletasks()
         width = self.root.winfo_width()
         height = self.root.winfo_height()
@@ -479,1132 +276,198 @@ class MainWindow:
         y = (self.root.winfo_screenheight() // 2) - (height // 2)
         self.root.geometry(f'{width}x{height}+{x}+{y}')
         
-    def update_status(self, message):
-        """Update the status bar"""
-        self.status_text.config(text=message)
-        self.root.update()
-        
-    def update_server_info(self):
-        """Update server information display"""
-        if hasattr(self, 'server_info'):
-            info_text = f"""Server Information:
-═══════════════════════════════════════════════════════════
-
-Platform: {self.detect_platform()}
-Python: {sys.version.split()[0]}
-Server Status: {self.server_status}
-
-Network Interfaces:
-{self.get_network_info()}
-
-Performance Profile: {self.performance_var.get() if hasattr(self, 'performance_var') else 'Maximum'}
-Theme: {self.theme_var.get() if hasattr(self, 'theme_var') else 'Kali Dark'}
-
-Ready to start PXE server...
-Click 'START PXE SERVER' to begin.
-            """
-            
-            self.server_info.config(state=tk.NORMAL)
-            self.server_info.delete(1.0, tk.END)
-            self.server_info.insert(1.0, info_text)
-            self.server_info.config(state=tk.DISABLED)
-            
-    def get_network_info(self):
-        """Get network interface information"""
-        try:
-            interfaces = self.network_manager.get_interfaces()
-            info_lines = []
-            for interface in interfaces:
-                ip = self.network_manager.get_interface_ip(interface)
-                if ip:
-                    info_lines.append(f"  {interface}: {ip}")
-            return '\n'.join(info_lines) if info_lines else "  No active interfaces found"
-        except Exception as e:
-            return f"  Error getting network info: {e}"
-            
-    def update_network_info(self):
-        """Update network interface dropdown"""
-        try:
-            interfaces = self.network_manager.get_interfaces()
-            self.interface_combo['values'] = interfaces
-            if interfaces:
-                self.interface_var.set(interfaces[0])
-        except Exception as e:
-            self.update_status(f"Network error: {e}")
-            
     def start_server(self):
         """Start the PXE server"""
-        if self.is_server_running:
+        if not PXE_AVAILABLE:
+            messagebox.showerror("Error", "PXE server module not available!")
+            return
+            
+        if self.server_running:
             return
             
         def server_thread():
             try:
-                self.update_status("Starting PXE server...")
-                self.logger.start_session()
+                self.add_log("Starting PXE server...")
+                self.add_log("=" * 50)
                 
-                # Create server instance
-                self.pxe_server = PXEServer(
-                    settings=self.settings,
-                    logger=self.logger,
-                    network_manager=self.network_manager
-                )
-                
-                # Prepare boot files
-                self.update_status("Preparing boot files...")
-                if not self.pxe_server.prepare_boot_files():
-                    self.update_status("Failed to prepare boot files")
-                    return
-                    
-                # Start server
-                self.update_status("Starting servers...")
-                self.pxe_server.start()
-                self.is_server_running = True
+                # Create server
+                self.pxe_server = TermuxPXEServer()
+                self.server_running = True
                 
                 # Update UI
-                self.start_button.config(state=tk.DISABLED)
-                self.stop_button.config(state=tk.NORMAL)
-                self.status_label.config(text="● RUNNING", foreground=self.colors['success'])
-                self.server_status = "RUNNING"
+                self.root.after(0, self.on_server_started)
+                self.root.after(0, self.start_server_logs)
                 
-                self.update_status("PXE Server is running!")
-                self.logger.success("PXE Server started successfully")
-                self.update_server_info()
+                # Start server
+                self.pxe_server.start()
                 
-                # Start monitoring
-                self.start_monitoring()
-                
+                # Keep running
+                while self.server_running:
+                    time.sleep(1)
+                    
             except Exception as e:
-                self.update_status(f"Server error: {e}")
-                self.logger.error(f"Failed to start server: {e}")
+                self.add_log(f"Server error: {e}")
+                self.root.after(0, self.on_server_stopped)
                 
+        # Start server thread
         threading.Thread(target=server_thread, daemon=True).start()
         
     def stop_server(self):
         """Stop the PXE server"""
-        if not self.is_server_running:
+        if not self.server_running:
             return
             
-        try:
-            self.update_status("Stopping PXE server...")
-            if self.pxe_server:
-                self.pxe_server.stop()
-                
-            self.is_server_running = False
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
-            self.status_label.config(text="● STOPPED", foreground=self.colors['error'])
-            self.server_status = "STOPPED"
-            
-            self.update_status("PXE Server stopped")
-            self.logger.info("PXE Server stopped")
-            self.update_server_info()
-            
-            # Stop monitoring
-            self.stop_monitoring()
-            
-        except Exception as e:
-            self.update_status(f"Stop error: {e}")
-            self.logger.error(f"Error stopping server: {e}")
-            
-    def show_boot_instructions(self):
-        """Show boot instructions"""
-        instructions = """
-🖥️ PXE BOOT INSTRUCTIONS
-
-1. Ensure target PC is connected to the same network
-2. Enter BIOS/UEFI settings (F2, F12, or Del key)
-3. Enable PXE boot or Network Boot
-4. Set Network Boot as first boot priority
-5. Save changes and reboot
-6. The PC will connect to our PXE server
-
-⚠️ IMPORTANT NOTES:
-• Make sure no other DHCP servers are running
-• The target PC must be on the same network
-• Some BIOS require specific PXE settings
-• This server works across platforms (Termux, Linux, macOS, Windows)
-
-The PXE server is now running and ready to serve boot files!
-        """
-        messagebox.showinfo("Boot Instructions", instructions)
+        self.server_running = False
         
-    def apply_network_config(self):
-        """Apply network configuration"""
-        try:
-            config = {
-                'interface': self.interface_var.get(),
-                'server_ip': self.server_ip_var.get(),
-                'dhcp_start': self.dhcp_start_var.get(),
-                'dhcp_end': self.dhcp_end_var.get()
-            }
-            self.settings.save_config(config)
-            self.update_status("Network configuration saved")
-        except Exception as e:
-            self.update_status(f"Config error: {e}")
+        if self.pxe_server:
+            self.pxe_server.stop()
             
-    def apply_performance(self):
-        """Apply performance profile"""
-        try:
-            profile = self.performance_var.get()
-            self.settings.set('performance', profile)
-            
-            # Update description
-            descriptions = {
-                'Maximum': 'Ultimate performance for gaming and intensive tasks. CPU governor set to performance, maximum memory allocation, no power saving.',
-                'Gaming': 'Optimized for gaming with real-time scheduling, maximum GPU acceleration, and high network performance.',
-                'Balanced': 'Balanced performance for general use with moderate power management and system responsiveness.',
-                'Minimal': 'Power-saving configuration for battery life and minimal resource usage.'
-            }
-            
-            desc = descriptions.get(profile, profile)
-            self.performance_desc.config(state=tk.NORMAL)
-            self.performance_desc.delete(1.0, tk.END)
-            self.performance_desc.insert(1.0, desc)
-            self.performance_desc.config(state=tk.DISABLED)
-            
-            self.update_status(f"Performance profile '{profile}' applied")
-        except Exception as e:
-            self.update_status(f"Performance error: {e}")
-            
-    def run_benchmark(self):
-        """Run performance benchmark"""
-        def benchmark_thread():
-            try:
-                self.update_status("Running performance benchmark...")
-                
-                # Create optimization script
-                profile = self.performance_var.get()
-                script_path = self.performance_optimizer.create_system_optimization_script(profile.lower())
-                
-                self.update_status("Benchmark completed - optimization script created")
-                self.logger.info(f"Performance benchmark completed for {profile} profile")
-                
-            except Exception as e:
-                self.update_status(f"Benchmark error: {e}")
-                self.logger.error(f"Benchmark failed: {e}")
-                
-        threading.Thread(target=benchmark_thread, daemon=True).start()
+        self.on_server_stopped()
         
-    def apply_customization(self):
-        """Apply Arch customization"""
-        try:
-            theme = self.theme_var.get()
-            tools = self.tools_var.get()
-            
-            self.settings.set('ui_theme', theme)
-            self.settings.set('tools', tools)
-            
-            # Create customization
-            result = self.arch_customizer.create_all_customizations(theme, self.performance_var.get())
-            
-            if result:
-                self.update_status(f"Customization applied: {theme} theme with {tools}")
-                self.logger.success(f"Arch customizations created for {theme} theme")
-            else:
-                self.update_status("Customization failed")
-                
-        except Exception as e:
-            self.update_status(f"Customization error: {e}")
-            
-    def preview_config(self):
-        """Preview configuration"""
-        try:
-            config = {
-                'Theme': self.theme_var.get(),
-                'Performance': self.performance_var.get(),
-                'Tools': self.tools_var.get(),
-                'Interface': self.interface_var.get(),
-                'Server IP': self.server_ip_var.get()
-            }
-            
-            preview = "Configuration Preview:\n" + "="*30 + "\n"
-            for key, value in config.items():
-                preview += f"{key}: {value}\n"
-                
-            messagebox.showinfo("Configuration Preview", preview)
-            
-        except Exception as e:
-            self.update_status(f"Preview error: {e}")
-            
-    def start_monitoring(self):
-        """Start system monitoring"""
-        self.monitoring_active = True
-        self.update_monitoring()
+    def on_server_started(self):
+        """Called when server starts"""
+        self.start_button.config(state=tk.DISABLED)
+        self.stop_button.config(state=tk.NORMAL)
+        self.status_label.config(text="● RUNNING", fg=self.colors['success'])
+        self.add_log("Server started successfully!")
+        self.add_log("Ready to accept PXE boot requests")
         
-    def stop_monitoring(self):
-        """Stop system monitoring"""
-        self.monitoring_active = False
+    def on_server_stopped(self):
+        """Called when server stops"""
+        self.start_button.config(state=tk.NORMAL)
+        self.stop_button.config(state=tk.DISABLED)
+        self.status_label.config(text="● STOPPED", fg=self.colors['error'])
+        self.add_log("Server stopped")
         
-    def update_monitoring(self):
-        """Update monitoring display"""
-        if not self.monitoring_active:
-            return
+    def start_server_logs(self):
+        """Start monitoring server logs"""
+        def log_monitor():
+            while self.server_running:
+                time.sleep(2)
+                self.root.after(0, self.update_status_display)
+                
+        threading.Thread(target=log_monitor, daemon=True).start()
+        
+    def add_log(self, message):
+        """Add message to log"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        log_message = f"[{timestamp}] {message}"
+        self.log_buffer.append(log_message)
+        
+        # Update log display
+        self.root.after(0, self.update_log_display)
+        
+    def update_log_display(self):
+        """Update log display"""
+        if hasattr(self, 'log_text'):
+            self.log_text.config(state=tk.NORMAL)
+            self.log_text.delete(1.0, tk.END)
             
-        try:
-            import psutil
-            import platform
+            # Show last 50 log entries
+            for log_entry in list(self.log_buffer)[-50:]:
+                self.log_text.insert(tk.END, log_entry + "\n")
+                
+            self.log_text.config(state=tk.DISABLED)
+            self.log_text.see(tk.END)
             
-            # System information
-            system_info = f"""System Information:
-═══════════════════════════════════════
-Platform: {platform.platform()}
-Python: {python_version}
-CPU: {platform.processor() or 'Unknown'}
-Memory: {psutil.virtual_memory().total // (1024**3)} GB total
+    def update_status_display(self):
+        """Update status display"""
+        if hasattr(self, 'status_text'):
+            status_info = f"""Server Status: {"RUNNING" if self.server_running else "STOPPED"}
+Platform: {self.get_platform()}
+Python: {sys.version.split()[0]}
 
-Network Interfaces: {len(self.network_manager.get_interfaces())}
-PXE Server: {self.server_status}
-Performance Profile: {self.performance_var.get() if hasattr(self, 'performance_var') else 'Maximum'}
+Network Information:
+{self.get_network_info()}
+
+PXE Server Ready:
+{"Yes" if self.server_running else "No - Click START to begin"}
+
+Files Created:
+{self.get_boot_files_info()}
+
+Usage:
+1. Click START to run PXE server
+2. Configure target PC for network boot
+3. Monitor logs for PXE requests
+4. Click STOP when done
+
+This server creates:
+• DHCP server for IP assignment
+• TFTP server for boot file transfer
+• PXE configuration for boot menu
+• Arch Linux "on steroids" boot support
             """
             
-            # Performance metrics
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
+            self.status_text.config(state=tk.NORMAL)
+            self.status_text.delete(1.0, tk.END)
+            self.status_text.insert(1.0, status_info)
+            self.status_text.config(state=tk.DISABLED)
             
-            metrics = f"""Performance Metrics:
-═══════════════════════════════════════
-CPU Usage: {cpu_percent}%
-CPU Cores: {psutil.cpu_count()}
-
-Memory: {memory.percent}% used
-  Total: {memory.total // (1024**3)} GB
-  Available: {memory.available // (1024**3)} GB
-
-Disk: {disk.percent}% used
-  Total: {disk.total // (1024**3)} GB
-  Free: {disk.free // (1024**3)} GB
-
-Network: {len(psutil.net_if_addrs())} interfaces
-Boot Time: {datetime.fromtimestamp(psutil.boot_time()).strftime('%Y-%m-%d %H:%M:%S')}
-            """
+    def get_network_info(self):
+        """Get network interface information"""
+        try:
+            import socket
             
-            # Update displays
-            self.system_info.config(state=tk.NORMAL)
-            self.system_info.delete(1.0, tk.END)
-            self.system_info.insert(1.0, system_info)
-            self.system_info.config(state=tk.DISABLED)
+            # Get local IP
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            local_ip = s.getsockname()[0]
+            s.close()
             
-            self.metrics_display.config(state=tk.NORMAL)
-            self.metrics_display.delete(1.0, tk.END)
-            self.metrics_display.insert(1.0, metrics)
-            self.metrics_display.config(state=tk.DISABLED)
-            
-            # Update performance indicator
-            if cpu_percent > 80:
-                self.perf_indicator.config(text="🔥", foreground=self.colors['error'])
-            elif cpu_percent > 50:
-                self.perf_indicator.config(text="⚡", foreground=self.colors['warning'])
-            else:
-                self.perf_indicator.config(text="✅", foreground=self.colors['success'])
-                
+            return f"  Local IP: {local_ip}\n  Subnet: 192.168.1.0/24\n  DHCP Range: 192.168.1.50-200"
         except Exception as e:
-            self.update_status(f"Monitoring error: {e}")
+            return f"  Error getting network info: {e}"
             
+    def get_boot_files_info(self):
+        """Get boot files information"""
+        try:
+            if hasattr(self, 'pxe_server') and self.pxe_server:
+                base_dir = self.pxe_server.base_dir
+                tftp_dir = self.pxe_server.tftp_dir
+                
+                files = []
+                for root, dirs, filenames in os.walk(tftp_dir):
+                    for filename in filenames:
+                        if filename != '.gitkeep':
+                            rel_path = os.path.relpath(os.path.join(root, filename), tftp_dir)
+                            files.append(f"  {rel_path}")
+                            
+                return '\n'.join(files) if files else "  No files created yet"
+            else:
+                return "  Files will be created when server starts"
+        except Exception as e:
+            return f"  Error: {e}"
+            
+    def update_server_status(self):
+        """Update server status periodically"""
+        self.update_status_display()
+        
         # Schedule next update
-        if self.monitoring_active:
-            self.root.after(2000, self.update_monitoring)  # Update every 2 secondsMain GUI Window for Termux PXE Boot
-Cross-platform compatible GUI with modern interface
-"""
-import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
-import os
-import sys
-import time
-from datetime import datetime
-from pathlib import Path
-
-# Add current directory to Python path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-try:
-    from pxe.server import PXEServer
-    from config.settings import Settings
-    from utils.logger import Logger
-    from utils.network import NetworkManager
-    from arch.customizer import ArchCustomizer
-    from optimizations.performance import PerformanceOptimizer
-except ImportError as e:
-    print(f"Import error: {e}")
-    print("Please ensure all modules are properly installed.")
-
-class MainWindow:
-    def __init__(self, root, app, settings=None, logger=None, network_manager=None, pxe_server=None, arch_customizer=None, performance_optimizer=None):
-        self.root = root
-        self.app = app
-        self.settings = settings or Settings()
-        self.logger = logger or Logger()
-        self.network_manager = network_manager or NetworkManager()
-        self.pxe_server = pxe_server
-        self.arch_customizer = arch_customizer or ArchCustomizer(self.settings, self.logger)
-        self.performance_optimizer = performance_optimizer or PerformanceOptimizer(self.settings, self.logger)
-        
-        # Server state
-        self.is_server_running = False
-        self.server_status = "STOPPED"
-        
-        # Performance monitoring
-        self.monitoring_active = False
-        self.performance_data = {}
-        
-        # Create GUI
-        self.setup_styles()
-        self.create_interface()
-        self.center_window()
-        
-        # Start background tasks
-        self.update_network_info()
-        
-    def setup_styles(self):
-        """Setup modern, Kali-inspired styling"""
-        style = ttk.Style()
-        
-        # Try to use modern theme
-        try:
-            style.theme_use('clam')
-        except:
-            style.theme_use('default')
-            
-        # Configure custom styles for dark theme
-        self.colors = {
-            'bg': '#0a0a0a',
-            'fg': '#00ff00',
-            'secondary': '#1a1a1a',
-            'accent': '#00aa00',
-            'warning': '#ffaa00',
-            'error': '#ff4444',
-            'success': '#00ff88'
-        }
-        
-        # Override styles
-        style.configure('Dark.TFrame', background=self.colors['bg'], relief='flat', borderwidth=0)
-        style.configure('Dark.TLabel', background=self.colors['bg'], foreground=self.colors['fg'], 
-                       font=('JetBrains Mono', 10))
-        style.configure('Dark.TButton', background=self.colors['secondary'], 
-                       foreground=self.colors['fg'], font=('JetBrains Mono', 10, 'bold'),
-                       relief='flat', borderwidth=1)
-        style.configure('Dark.TButton:active', background=self.colors['accent'])
-        style.configure('Dark.TEntry', fieldbackground=self.colors['secondary'], 
-                       foreground=self.colors['fg'], font=('JetBrains Mono', 10))
-        style.configure('Dark.Horizontal.TProgressbar', background=self.colors['accent'])
-        style.configure('Dark.TNotebook', background=self.colors['bg'])
-        style.configure('Dark.TNotebook.Tab', background=self.colors['secondary'], 
-                       foreground=self.colors['fg'], padding=[10, 5])
-        
-    def create_interface(self):
-        """Create the main interface"""
-        # Main container
-        main_container = ttk.Frame(self.root, style='Dark.TFrame')
-        main_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Title section
-        self.create_title_section(main_container)
-        
-        # Tab control for different sections
-        self.create_notebook(main_container)
-        
-        # Status bar
-        self.create_status_bar(main_container)
-        
-    def create_title_section(self, parent):
-        """Create the title section"""
-        title_frame = ttk.Frame(parent, style='Dark.TFrame')
-        title_frame.pack(fill=tk.X, pady=(0, 15))
-        
-        # Main title
-        title_label = ttk.Label(
-            title_frame,
-            text="⚡ TERMUX PXE BOOT - STEROID EDITION ⚡",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 20, 'bold')
-        )
-        title_label.pack()
-        
-        # Subtitle
-        subtitle_label = ttk.Label(
-            title_frame,
-            text="Cross-Platform Network Boot Server - Performance Optimized",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 12)
-        )
-        subtitle_label.pack()
-        
-        # Version and platform info
-        info_text = f"v3.0.0 - Steroid Edition | Platform: {self.detect_platform()} | Python: {sys.version.split()[0]}"
-        info_label = ttk.Label(
-            title_frame,
-            text=info_text,
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 9)
-        )
-        info_label.pack()
-        
-    def detect_platform(self):
-        """Detect the current platform"""
-        import platform
-        system = platform.system()
-        if system == "Linux":
-            if os.path.exists("/data/data/com.termux/files/home"):
-                return "Termux (Android)"
-            else:
-                return "Linux"
-        elif system == "Darwin":
-            return "macOS"
-        elif system == "Windows":
-            return "Windows"
+        if self.server_running:
+            self.root.after(3000, self.update_server_status)  # Every 3 seconds
         else:
-            return system
+            self.root.after(5000, self.update_server_status)  # Every 5 seconds when stopped
             
-    def create_notebook(self, parent):
-        """Create notebook with tabs for different functions"""
-        self.notebook = ttk.Notebook(parent, style='Dark.TNotebook')
-        self.notebook.pack(fill=tk.BOTH, expand=True, pady=(0, 10))
-        
-        # Server Control Tab
-        self.server_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.server_frame, text="🚀 Server Control")
-        self.create_server_tab()
-        
-        # Network Config Tab
-        self.network_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.network_frame, text="🌐 Network Config")
-        self.create_network_tab()
-        
-        # Performance Tab
-        self.performance_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.performance_frame, text="⚡ Performance")
-        self.create_performance_tab()
-        
-        # Arch Customization Tab
-        self.arch_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.arch_frame, text="🎨 Arch Customization")
-        self.create_arch_tab()
-        
-        # Monitoring Tab
-        self.monitor_frame = ttk.Frame(self.notebook, style='Dark.TFrame')
-        self.notebook.add(self.monitor_frame, text="📊 Monitoring")
-        self.create_monitoring_tab()
-        
-    def create_server_tab(self):
-        """Create server control tab"""
-        # Server control section
-        control_frame = ttk.LabelFrame(self.server_frame, text="Server Control", style='Dark.TFrame')
-        control_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Start/Stop buttons
-        buttons_frame = ttk.Frame(control_frame, style='Dark.TFrame')
-        buttons_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        self.start_button = ttk.Button(
-            buttons_frame,
-            text="▶️ START PXE SERVER",
-            command=self.start_server,
-            style='Dark.TButton'
-        )
-        self.start_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        self.stop_button = ttk.Button(
-            buttons_frame,
-            text="⏹️ STOP SERVER",
-            command=self.stop_server,
-            style='Dark.TButton',
-            state=tk.DISABLED
-        )
-        self.stop_button.pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            buttons_frame,
-            text="🖥️ Boot Instructions",
-            command=self.show_boot_instructions,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT)
-        
-        # Status display
-        status_frame = ttk.Frame(control_frame, style='Dark.TFrame')
-        status_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
-        
-        ttk.Label(status_frame, text="Status:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.status_label = ttk.Label(
-            status_frame,
-            text="● STOPPED",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 12, 'bold')
-        )
-        self.status_label.pack(side=tk.LEFT, padx=(10, 0))
-        
-        # Server information
-        info_frame = ttk.LabelFrame(self.server_frame, text="Server Information", style='Dark.TFrame')
-        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Create scrolled text for server info
-        self.server_info = tk.Text(
-            info_frame,
-            height=10,
-            bg=self.colors['secondary'],
-            fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            insertbackground=self.colors['fg'],
-            selectbackground=self.colors['accent'],
-            wrap=tk.WORD
-        )
-        
-        # Scrollbar for server info
-        info_scrollbar = ttk.Scrollbar(info_frame, orient=tk.VERTICAL, command=self.server_info.yview)
-        self.server_info.configure(yscrollcommand=info_scrollbar.set)
-        
-        self.server_info.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        info_scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Initialize server info
-        self.update_server_info()
-        
-    def create_network_tab(self):
-        """Create network configuration tab"""
-        # Network interface selection
-        interface_frame = ttk.LabelFrame(self.network_frame, text="Network Interface", style='Dark.TFrame')
-        interface_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Interface dropdown
-        interface_select_frame = ttk.Frame(interface_frame, style='Dark.TFrame')
-        interface_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(interface_select_frame, text="Interface:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.interface_var = tk.StringVar()
-        self.interface_combo = ttk.Combobox(
-            interface_select_frame,
-            textvariable=self.interface_var,
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        self.interface_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # IP Configuration
-        ip_frame = ttk.LabelFrame(self.network_frame, text="IP Configuration", style='Dark.TFrame')
-        ip_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Server IP
-        server_ip_frame = ttk.Frame(ip_frame, style='Dark.TFrame')
-        server_ip_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(server_ip_frame, text="Server IP:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.server_ip_var = tk.StringVar(value="192.168.1.100")
-        ttk.Entry(server_ip_frame, textvariable=self.server_ip_var, style='Dark.TEntry', width=15).pack(side=tk.LEFT, padx=(10, 0))
-        
-        # DHCP Range
-        dhcp_frame = ttk.Frame(ip_frame, style='Dark.TFrame')
-        dhcp_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(dhcp_frame, text="DHCP Range:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.dhcp_start_var = tk.StringVar(value="192.168.1.50")
-        self.dhcp_end_var = tk.StringVar(value="192.168.1.200")
-        
-        ttk.Entry(dhcp_frame, textvariable=self.dhcp_start_var, style='Dark.TEntry', width=12).pack(side=tk.LEFT, padx=(10, 5))
-        ttk.Label(dhcp_frame, text="to", style='Dark.TLabel').pack(side=tk.LEFT)
-        ttk.Entry(dhcp_frame, textvariable=self.dhcp_end_var, style='Dark.TEntry', width=12).pack(side=tk.LEFT, padx=5)
-        
-        # Apply button
-        ttk.Button(
-            ip_frame,
-            text="💾 Apply Network Config",
-            command=self.apply_network_config,
-            style='Dark.TButton'
-        ).pack(pady=10)
-        
-    def create_performance_tab(self):
-        """Create performance optimization tab"""
-        # Performance profile selection
-        profile_frame = ttk.LabelFrame(self.performance_frame, text="Performance Profile", style='Dark.TFrame')
-        profile_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        profile_select_frame = ttk.Frame(profile_frame, style='Dark.TFrame')
-        profile_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(profile_select_frame, text="Profile:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.performance_var = tk.StringVar(value="Maximum")
-        profile_combo = ttk.Combobox(
-            profile_select_frame,
-            textvariable=self.performance_var,
-            values=["Maximum", "Gaming", "Balanced", "Minimal"],
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        profile_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # Performance controls
-        controls_frame = ttk.Frame(profile_frame, style='Dark.TFrame')
-        controls_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Button(
-            controls_frame,
-            text="⚡ Apply Performance",
-            command=self.apply_performance,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            controls_frame,
-            text="📊 Benchmark",
-            command=self.run_benchmark,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT)
-        
-        # Performance description
-        self.performance_desc = tk.Text(
-            profile_frame,
-            height=6,
-            bg=self.colors['secondary'],
-            fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            wrap=tk.WORD,
-            state=tk.DISABLED
-        )
-        self.performance_desc.pack(fill=tk.X, padx=10, pady=10)
-        
-    def create_arch_tab(self):
-        """Create Arch Linux customization tab"""
-        # Theme selection
-        theme_frame = ttk.LabelFrame(self.arch_frame, text="Theme & Customization", style='Dark.TFrame')
-        theme_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        theme_select_frame = ttk.Frame(theme_frame, style='Dark.TFrame')
-        theme_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(theme_select_frame, text="Theme:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.theme_var = tk.StringVar(value="Kali Dark")
-        theme_combo = ttk.Combobox(
-            theme_select_frame,
-            textvariable=self.theme_var,
-            values=["Kali Dark", "Cyberpunk", "Matrix", "Neon Green"],
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        theme_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # Tool selection
-        tools_frame = ttk.LabelFrame(self.arch_frame, text="Tool Package", style='Dark.TFrame')
-        tools_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        tools_select_frame = ttk.Frame(tools_frame, style='Dark.TFrame')
-        tools_select_frame.pack(fill=tk.X, padx=10, pady=5)
-        
-        ttk.Label(tools_select_frame, text="Tools:", style='Dark.TLabel').pack(side=tk.LEFT)
-        self.tools_var = tk.StringVar(value="Kali Tools + Performance")
-        tools_combo = ttk.Combobox(
-            tools_select_frame,
-            textvariable=self.tools_var,
-            values=["Kali Tools + Performance", "Full Kali Suite", "Pentesting Essentials", "Custom Selection"],
-            style='Dark.TEntry',
-            state='readonly'
-        )
-        tools_combo.pack(side=tk.LEFT, padx=(10, 0), fill=tk.X, expand=True)
-        
-        # Customization controls
-        controls_frame = ttk.Frame(theme_frame, style='Dark.TFrame')
-        controls_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        ttk.Button(
-            controls_frame,
-            text="🎨 Apply Customization",
-            command=self.apply_customization,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT, padx=(0, 10))
-        
-        ttk.Button(
-            controls_frame,
-            text="📋 Preview Config",
-            command=self.preview_config,
-            style='Dark.TButton'
-        ).pack(side=tk.LEFT)
-        
-    def create_monitoring_tab(self):
-        """Create monitoring tab"""
-        # System information
-        info_frame = ttk.LabelFrame(self.monitor_frame, text="System Information", style='Dark.TFrame')
-        info_frame.pack(fill=tk.X, padx=10, pady=10)
-        
-        # System info display
-        self.system_info = tk.Text(
-            info_frame,
-            height=8,
-            bg=self.colors['secondary'],
-            fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            wrap=tk.WORD,
-            state=tk.DISABLED
-        )
-        self.system_info.pack(fill=tk.X, padx=10, pady=10)
-        
-        # Performance metrics
-        metrics_frame = ttk.LabelFrame(self.monitor_frame, text="Performance Metrics", style='Dark.TFrame')
-        metrics_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # Metrics display
-        self.metrics_display = tk.Text(
-            metrics_frame,
-            height=10,
-            bg=self.colors['secondary'],
-            fg=self.colors['fg'],
-            font=('JetBrains Mono', 9),
-            wrap=tk.WORD,
-            state=tk.DISABLED
-        )
-        self.metrics_display.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-    def create_status_bar(self, parent):
-        """Create the status bar"""
-        self.status_bar = ttk.Frame(parent, style='Dark.TFrame')
-        self.status_bar.pack(fill=tk.X, side=tk.BOTTOM)
-        
-        # Status text
-        self.status_text = ttk.Label(
-            self.status_bar,
-            text="Ready",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 9)
-        )
-        self.status_text.pack(side=tk.LEFT, padx=10, pady=5)
-        
-        # Performance indicator
-        self.perf_indicator = ttk.Label(
-            self.status_bar,
-            text="⚡",
-            style='Dark.TLabel',
-            font=('JetBrains Mono', 12)
-        )
-        self.perf_indicator.pack(side=tk.RIGHT, padx=10, pady=5)
-        
-    def center_window(self):
-        """Center the window on screen"""
-        self.root.update_idletasks()
-        width = self.root.winfo_width()
-        height = self.root.winfo_height()
-        x = (self.root.winfo_screenwidth() // 2) - (width // 2)
-        y = (self.root.winfo_screenheight() // 2) - (height // 2)
-        self.root.geometry(f'{width}x{height}+{x}+{y}')
-        
-    def update_status(self, message):
-        """Update the status bar"""
-        self.status_text.config(text=message)
-        self.root.update()
-        
-    def update_server_info(self):
-        """Update server information display"""
-        if hasattr(self, 'server_info'):
-            info_text = f"""Server Information:
-═══════════════════════════════════════════════════════════
-
-Platform: {self.detect_platform()}
-Python: {sys.version.split()[0]}
-Server Status: {self.server_status}
-
-Network Interfaces:
-{self.get_network_info()}
-
-Performance Profile: {self.performance_var.get() if hasattr(self, 'performance_var') else 'Maximum'}
-Theme: {self.theme_var.get() if hasattr(self, 'theme_var') else 'Kali Dark'}
-
-Ready to start PXE server...
-Click 'START PXE SERVER' to begin.
-            """
-            
-            self.server_info.config(state=tk.NORMAL)
-            self.server_info.delete(1.0, tk.END)
-            self.server_info.insert(1.0, info_text)
-            self.server_info.config(state=tk.DISABLED)
-            
-    def get_network_info(self):
-        """Get network interface information"""
+    def run(self):
+        """Run the GUI"""
         try:
-            interfaces = self.network_manager.get_interfaces()
-            info_lines = []
-            for interface in interfaces:
-                ip = self.network_manager.get_interface_ip(interface)
-                if ip:
-                    info_lines.append(f"  {interface}: {ip}")
-            return '\n'.join(info_lines) if info_lines else "  No active interfaces found"
+            # Handle window close
+            def on_closing():
+                if self.server_running:
+                    self.stop_server()
+                self.root.destroy()
+                
+            self.root.protocol("WM_DELETE_WINDOW", on_closing)
+            
+            # Start GUI
+            self.root.mainloop()
+            
+        except KeyboardInterrupt:
+            self.stop_server()
         except Exception as e:
-            return f"  Error getting network info: {e}"
-            
-    def update_network_info(self):
-        """Update network interface dropdown"""
-        try:
-            interfaces = self.network_manager.get_interfaces()
-            self.interface_combo['values'] = interfaces
-            if interfaces:
-                self.interface_var.set(interfaces[0])
-        except Exception as e:
-            self.update_status(f"Network error: {e}")
-            
-    def start_server(self):
-        """Start the PXE server"""
-        if self.is_server_running:
-            return
-            
-        def server_thread():
-            try:
-                self.update_status("Starting PXE server...")
-                self.logger.start_session()
-                
-                # Create server instance
-                self.pxe_server = PXEServer(
-                    settings=self.settings,
-                    logger=self.logger,
-                    network_manager=self.network_manager
-                )
-                
-                # Prepare boot files
-                self.update_status("Preparing boot files...")
-                if not self.pxe_server.prepare_boot_files():
-                    self.update_status("Failed to prepare boot files")
-                    return
-                    
-                # Start server
-                self.update_status("Starting servers...")
-                self.pxe_server.start()
-                self.is_server_running = True
-                
-                # Update UI
-                self.start_button.config(state=tk.DISABLED)
-                self.stop_button.config(state=tk.NORMAL)
-                self.status_label.config(text="● RUNNING", foreground=self.colors['success'])
-                self.server_status = "RUNNING"
-                
-                self.update_status("PXE Server is running!")
-                self.logger.success("PXE Server started successfully")
-                self.update_server_info()
-                
-                # Start monitoring
-                self.start_monitoring()
-                
-            except Exception as e:
-                self.update_status(f"Server error: {e}")
-                self.logger.error(f"Failed to start server: {e}")
-                
-        threading.Thread(target=server_thread, daemon=True).start()
-        
-    def stop_server(self):
-        """Stop the PXE server"""
-        if not self.is_server_running:
-            return
-            
-        try:
-            self.update_status("Stopping PXE server...")
-            if self.pxe_server:
-                self.pxe_server.stop()
-                
-            self.is_server_running = False
-            self.start_button.config(state=tk.NORMAL)
-            self.stop_button.config(state=tk.DISABLED)
-            self.status_label.config(text="● STOPPED", foreground=self.colors['error'])
-            self.server_status = "STOPPED"
-            
-            self.update_status("PXE Server stopped")
-            self.logger.info("PXE Server stopped")
-            self.update_server_info()
-            
-            # Stop monitoring
-            self.stop_monitoring()
-            
-        except Exception as e:
-            self.update_status(f"Stop error: {e}")
-            self.logger.error(f"Error stopping server: {e}")
-            
-    def show_boot_instructions(self):
-        """Show boot instructions"""
-        instructions = """
-🖥️ PXE BOOT INSTRUCTIONS
+            print(f"GUI error: {e}")
 
-1. Ensure target PC is connected to the same network
-2. Enter BIOS/UEFI settings (F2, F12, or Del key)
-3. Enable PXE boot or Network Boot
-4. Set Network Boot as first boot priority
-5. Save changes and reboot
-6. The PC will connect to our PXE server
-
-⚠️ IMPORTANT NOTES:
-• Make sure no other DHCP servers are running
-• The target PC must be on the same network
-• Some BIOS require specific PXE settings
-• This server works across platforms (Termux, Linux, macOS, Windows)
-
-The PXE server is now running and ready to serve boot files!
-        """
-        messagebox.showinfo("Boot Instructions", instructions)
-        
-    def apply_network_config(self):
-        """Apply network configuration"""
-        try:
-            config = {
-                'interface': self.interface_var.get(),
-                'server_ip': self.server_ip_var.get(),
-                'dhcp_start': self.dhcp_start_var.get(),
-                'dhcp_end': self.dhcp_end_var.get()
-            }
-            self.settings.save_config(config)
-            self.update_status("Network configuration saved")
-        except Exception as e:
-            self.update_status(f"Config error: {e}")
-            
-    def apply_performance(self):
-        """Apply performance profile"""
-        try:
-            profile = self.performance_var.get()
-            self.settings.set('performance', profile)
-            
-            # Update description
-            descriptions = {
-                'Maximum': 'Ultimate performance for gaming and intensive tasks. CPU governor set to performance, maximum memory allocation, no power saving.',
-                'Gaming': 'Optimized for gaming with real-time scheduling, maximum GPU acceleration, and high network performance.',
-                'Balanced': 'Balanced performance for general use with moderate power management and system responsiveness.',
-                'Minimal': 'Power-saving configuration for battery life and minimal resource usage.'
-            }
-            
-            desc = descriptions.get(profile, profile)
-            self.performance_desc.config(state=tk.NORMAL)
-            self.performance_desc.delete(1.0, tk.END)
-            self.performance_desc.insert(1.0, desc)
-            self.performance_desc.config(state=tk.DISABLED)
-            
-            self.update_status(f"Performance profile '{profile}' applied")
-        except Exception as e:
-            self.update_status(f"Performance error: {e}")
-            
-    def run_benchmark(self):
-        """Run performance benchmark"""
-        def benchmark_thread():
-            try:
-                self.update_status("Running performance benchmark...")
-                
-                # Create optimization script
-                profile = self.performance_var.get()
-                script_path = self.performance_optimizer.create_system_optimization_script(profile.lower())
-                
-                self.update_status("Benchmark completed - optimization script created")
-                self.logger.info(f"Performance benchmark completed for {profile} profile")
-                
-            except Exception as e:
-                self.update_status(f"Benchmark error: {e}")
-                self.logger.error(f"Benchmark failed: {e}")
-                
-        threading.Thread(target=benchmark_thread, daemon=True).start()
-        
-    def apply_customization(self):
-        """Apply Arch customization"""
-        try:
-            theme = self.theme_var.get()
-            tools = self.tools_var.get()
-            
-            self.settings.set('ui_theme', theme)
-            self.settings.set('tools', tools)
-            
-            # Create customization
-            result = self.arch_customizer.create_all_customizations(theme, self.performance_var.get())
-            
-            if result:
-                self.update_status(f"Customization applied: {theme} theme with {tools}")
-                self.logger.success(f"Arch customizations created for {theme} theme")
-            else:
-                self.update_status("Customization failed")
-                
-        except Exception as e:
-            self.update_status(f"Customization error: {e}")
-            
-    def preview_config(self):
-        """Preview configuration"""
-        try:
-            config = {
-                'Theme': self.theme_var.get(),
-                'Performance': self.performance_var.get(),
-                'Tools': self.tools_var.get(),
-                'Interface': self.interface_var.get(),
-                'Server IP': self.server_ip_var.get()
-            }
-            
-            preview = "Configuration Preview:\n" + "="*30 + "\n"
-            for key, value in config.items():
-                preview += f"{key}: {value}\n"
-                
-            messagebox.showinfo("Configuration Preview", preview)
-            
-        except Exception as e:
-            self.update_status(f"Preview error: {e}")
-            
-    def start_monitoring(self):
-        """Start system monitoring"""
-        self.monitoring_active = True
-        self.update_monitoring()
-        
-    def stop_monitoring(self):
-        """Stop system monitoring"""
-        self.monitoring_active = False
-        
-    def update_monitoring(self):
-        """Update monitoring display"""
-        if not self.monitoring_active:
-            return
-            
-        try:
-            import psutil
-            import platform
-            
-            # System information
-            system_info = f"""System Information:
-═══════════════════════════════════════
-Platform: {platform.platform()}
-Python: {python_version}
-CPU: {platform.processor() or 'Unknown'}
-Memory: {psutil.virtual_memory().total // (1024**3)} GB total
-
-Network Interfaces: {len(self.network_manager.get_interfaces())}
-PXE Server: {self.server_status}
-Performance Profile: {self.performance_var.get() if hasattr(self, 'performance_var') else 'Maximum'}
-            """
-            
-            # Performance metrics
-            cpu_percent = psutil.cpu_percent(interval=1)
-            memory = psutil.virtual_memory()
-            disk = psutil.disk_usage('/')
-            
-            metrics = f"""Performance Metrics:
-═══════════════════════════════════════
-CPU Usage: {cpu_percent}%
-CPU Cores: {psutil.cpu_count()}
-
-Memory: {memory.percent}% used
-  Total: {memory.total // (1024**3)} GB
-  Available: {memory.available // (1024**3)} GB
-
-Disk: {disk.percent}% used
-  Total: {disk.total // (1024**3)} GB
-  Free: {disk.free // (1024**3)} GB
-
-Network: {len(psutil.net_if_addrs())} interfaces
-Boot Time: {datetime.fromtimestamp(psutil.boot_time()).strftime('%Y-%m-%d %H:%M:%S')}
-            """
-            
-            # Update displays
-            self.system_info.config(state=tk.NORMAL)
-            self.system_info.delete(1.0, tk.END)
-            self.system_info.insert(1.0, system_info)
-            self.system_info.config(state=tk.DISABLED)
-            
-            self.metrics_display.config(state=tk.NORMAL)
-            self.metrics_display.delete(1.0, tk.END)
-            self.metrics_display.insert(1.0, metrics)
-            self.metrics_display.config(state=tk.DISABLED)
-            
-            # Update performance indicator
-            if cpu_percent > 80:
-                self.perf_indicator.config(text="🔥", foreground=self.colors['error'])
-            elif cpu_percent > 50:
-                self.perf_indicator.config(text="⚡", foreground=self.colors['warning'])
-            else:
-                self.perf_indicator.config(text="✅", foreground=self.colors['success'])
-                
-        except Exception as e:
-            self.update_status(f"Monitoring error: {e}")
-            
-        # Schedule next update
-        if self.monitoring_active:
-            self.root.after(2000, self.update_monitoring)  # Update every 2 seconds
+if __name__ == "__main__":
+    app = PXEGUI()
+    app.run()
